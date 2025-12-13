@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <log.h>
+#include <linux/uaccess.h>
 
 #define HOOK_INTO_BRANCH_FUNC
 
@@ -235,7 +236,32 @@ typedef struct _fphook_chain
 
 static inline int is_bad_address(void *addr)
 {
-    return ((uint64_t)addr & 0x8000000000000000) != 0x8000000000000000;
+    uint64_t val = (uint64_t)addr;
+    // 检查是否在内核空间 (ARM64: 0xffff800000000000 - 0xffffffffffffffff)
+    if (val < 0xffff800000000000 || val > 0xffffffffffffffff) {
+        return 1;
+    }
+    // 检查是否对齐
+    if (val & 0x3) {
+        return 1;
+    }
+    return 0;
+}
+
+// 检查地址是否可以安全读取指令
+static inline int is_safe_instruction_address(void *addr)
+{
+    if (is_bad_address(addr)) {
+        return 0;
+    }
+    
+    // 尝试读取第一个指令，如果失败则返回0
+    // 在内核空间直接读取，但需要处理可能的异常
+    uint32_t inst;
+    if (probe_kernel_read(&inst, (uint32_t *)addr, sizeof(inst))) {
+        return 0;
+    }
+    return 1;
 }
 
 int32_t branch_from_to(uint32_t *tramp_buf, uint64_t src_addr, uint64_t dst_addr);

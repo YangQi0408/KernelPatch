@@ -113,12 +113,13 @@ static uint64_t relo_in_tramp(hook_t *hook, uint64_t addr)
 static uint64_t branch_func_addr_once(uint64_t addr)
 {
     uint64_t ret = addr;
-    uint32_t inst = *(uint32_t *)addr;
     
-    // 检查是否是有效的指令地址
-    if (is_bad_address((void *)addr)) {
+    // 使用安全的指令地址检查
+    if (!is_safe_instruction_address((void *)addr)) {
         return addr;
     }
+    
+    uint32_t inst = *(uint32_t *)addr;
     
     if ((inst & MASK_B) == INST_B) {
         uint64_t imm26 = bits32(inst, 25, 0);
@@ -141,8 +142,8 @@ uint64_t branch_func_addr(uint64_t addr)
     const int max_loop = 10; // 防止无限循环
     
     for (;;) {
-        // 检查是否是有效地址
-        if (is_bad_address((void *)addr)) {
+        // 使用安全的指令地址检查
+        if (!is_safe_instruction_address((void *)addr)) {
             return ret; // 返回最后一个有效地址
         }
         
@@ -589,9 +590,15 @@ hook_err_t hook_prepare(hook_t *hook)
     if (is_bad_address((void *)hook->origin_addr)) return -HOOK_BAD_ADDRESS;
     if (is_bad_address((void *)hook->replace_addr)) return -HOOK_BAD_ADDRESS;
     if (is_bad_address((void *)hook->relo_addr)) return -HOOK_BAD_ADDRESS;
+    
+    // 额外检查 origin_addr 是否可以安全读取指令
+    if (!is_safe_instruction_address((void *)hook->origin_addr)) {
+        return -HOOK_BAD_ADDRESS;
+    }
 
     // backup origin instruction
     for (int i = 0; i < TRAMPOLINE_MAX_NUM; i++) {
+        // 直接读取原始指令，因为已经验证过地址安全
         hook->origin_insts[i] = *((uint32_t *)hook->origin_addr + i);
     }
     // trampline to replace_addr
@@ -655,9 +662,16 @@ void hook_uninstall(hook_t *hook)
     uint64_t ori_prot = *entry;
     modify_entry_kernel(va, entry, (ori_prot | PTE_DBM) & ~PTE_RDONLY);
     flush_tlb_kernel_page(va);
+    
+    // 验证原始指令是否有效
     for (int32_t i = 0; i < hook->tramp_insts_num; i++) {
+        // 检查原始指令是否为0（可能未正确保存）
+        if (hook->origin_insts[i] == 0) {
+            logkv("Warning: origin_insts[%d] is 0, may not restore correctly\n", i);
+        }
         *((uint32_t *)hook->origin_addr + i) = hook->origin_insts[i];
     }
+    
     flush_icache_all();
     modify_entry_kernel(va, entry, ori_prot);
 }
