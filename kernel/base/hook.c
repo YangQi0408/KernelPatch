@@ -628,6 +628,14 @@ void hook_uninstall(hook_t *hook)
     uint64_t va = hook->origin_addr;
     uint64_t *entry = pgtable_entry_kernel(va);
     uint64_t ori_prot = *entry;
+    
+    // 记录原始指令用于调试
+    logkv("Uninstall hook at %llx:\n", hook->origin_addr);
+    for (int i = 0; i < 6 && i < TRAMPOLINE_MAX_NUM; i++) {
+        logkv("  origin_insts[%d]: 0x%08x\n", i, hook->origin_insts[i]);
+        logkv("  current_inst[%d]: 0x%08x\n", i, *((uint32_t *)hook->origin_addr + i));
+    }
+    
     modify_entry_kernel(va, entry, (ori_prot | PTE_DBM) & ~PTE_RDONLY);
     flush_tlb_kernel_page(va);
     
@@ -636,6 +644,7 @@ void hook_uninstall(hook_t *hook)
     int32_t restore_count = hook->tramp_insts_num;
     if (hook->origin_insts[0] == ARM64_PACIASP || hook->origin_insts[0] == ARM64_PACIBSP) {
         // PAC 函数需要恢复所有保存的指令
+        logkv("Detected PAC function, restoring %d instructions\n", TRAMPOLINE_MAX_NUM);
         restore_count = TRAMPOLINE_MAX_NUM;
     }
     
@@ -647,10 +656,28 @@ void hook_uninstall(hook_t *hook)
             break;
         }
         *((uint32_t *)hook->origin_addr + i) = hook->origin_insts[i];
+        // 每写入一个指令后立即刷新该页的指令缓存
+        flush_icache_all();
     }
     
+    // 强制内存屏障，确保所有写入完成
+    asm volatile("dsb ish" : : : "memory");
+    asm volatile("isb" : : : "memory");
+    
+    // 再次刷新指令缓存
     flush_icache_all();
+    
+    // 最后的内存屏障
+    asm volatile("dsb ish" : : : "memory");
+    asm volatile("isb" : : : "memory");
+    
     modify_entry_kernel(va, entry, ori_prot);
+    
+    // 再次记录恢复后的指令
+    logkv("After restore:\n");
+    for (int i = 0; i < 6 && i < TRAMPOLINE_MAX_NUM; i++) {
+        logkv("  restored_inst[%d]: 0x%08x\n", i, *((uint32_t *)hook->origin_addr + i));
+    }
 }
 KP_EXPORT_SYMBOL(hook_uninstall);
 
