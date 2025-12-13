@@ -630,9 +630,25 @@ void hook_uninstall(hook_t *hook)
     uint64_t ori_prot = *entry;
     modify_entry_kernel(va, entry, (ori_prot | PTE_DBM) & ~PTE_RDONLY);
     flush_tlb_kernel_page(va);
-    for (int32_t i = 0; i < hook->tramp_insts_num; i++) {
+    
+    // 计算需要恢复的指令数量
+    // 如果原始函数以 PAC 指令开头，我们需要恢复所有保存的指令
+    int32_t restore_count = hook->tramp_insts_num;
+    if (hook->origin_insts[0] == ARM64_PACIASP || hook->origin_insts[0] == ARM64_PACIBSP) {
+        // PAC 函数需要恢复所有保存的指令
+        restore_count = TRAMPOLINE_MAX_NUM;
+    }
+    
+    // 恢复原始指令
+    for (int32_t i = 0; i < restore_count; i++) {
+        // 检查原始指令是否为0（可能未正确保存）
+        if (hook->origin_insts[i] == 0) {
+            logkv("Warning: origin_insts[%d] is 0, may not restore correctly\n", i);
+            break;
+        }
         *((uint32_t *)hook->origin_addr + i) = hook->origin_insts[i];
     }
+    
     flush_icache_all();
     modify_entry_kernel(va, entry, ori_prot);
 }

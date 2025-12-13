@@ -120,19 +120,32 @@ uintptr_t syscalln_name_addr(int nr, int is_compat)
     const char *prefix[2];
     prefix[0] = "__arm64_";
     prefix[1] = "";
-    const char *suffix[3];
-    suffix[0] = ".cfi_jt";
+    // 优先查找不带 CFI 后缀的符号，避免钩子到跳转表
+    const char *suffix[4];
+    suffix[0] = "";  // 优先查找原始函数名
     suffix[1] = ".cfi";
-    suffix[2] = "";
+    suffix[2] = ".cfi_jt";
+    suffix[3] = ".cfi_jt"; // 保留以兼容
 
     uintptr_t addr = 0;
 
     char buffer[256];
     for (int i = 0; i < 2; i++) {
-        for (int j = 0; j < 3; j++) {
+        for (int j = 0; j < 4; j++) {
             snprintf(buffer, sizeof(buffer), "%s%s%s", prefix[i], name, suffix[j]);
             addr = kallsyms_lookup_name(buffer);
-            if (addr) break;
+            if (addr) {
+                // 如果找到的是 CFI 相关符号，继续查找原始函数
+                if (j > 0) {
+                    // 尝试查找原始函数
+                    snprintf(buffer, sizeof(buffer), "%s%s", prefix[i], name);
+                    uintptr_t orig_addr = kallsyms_lookup_name(buffer);
+                    if (orig_addr) {
+                        addr = orig_addr;
+                    }
+                }
+                break;
+            }
         }
         if (addr) break;
     }
