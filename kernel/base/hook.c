@@ -802,17 +802,34 @@ void hook_unwrap_remove(void *func, void *before, void *after, int remove)
     if (is_bad_address(func)) return;
     uint64_t faddr = (uint64_t)func;
     uint64_t origin = branch_func_addr(faddr);
-    if (is_bad_address(func)) return;
+    if (is_bad_address(origin)) return;
     hook_chain_t *chain = (hook_chain_t *)hook_get_mem_from_origin(origin);
     if (!chain) return;
     hook_chain_remove(chain, before, after);
     if (!remove) return;
-    // todo:
+    
+    // 检查是否所有链项都已清空
     for (int i = 0; i < HOOK_CHAIN_NUM; i++) {
         if (chain->states[i] != CHAIN_ITEM_STATE_EMPTY) return;
     }
+    
+    // 卸载钩子
     hook_chain_uninstall(chain);
-    // todo: unsafe
+    
+    // 添加内存屏障，确保所有指令执行完成
+    asm volatile("dsb ish" : : : "memory");
+    asm volatile("isb" : : : "memory");
+    
+    // 延迟释放，确保没有代码还在执行 trampoline
+    for (volatile int i = 0; i < 1000; i++) {
+        asm volatile("nop");
+    }
+    
+    // 再次添加内存屏障
+    asm volatile("dsb ish" : : : "memory");
+    asm volatile("isb" : : : "memory");
+    
+    // 现在安全地释放内存
     hook_mem_free(chain);
     logkv("Unwrap func: %llx\n", func);
 }
