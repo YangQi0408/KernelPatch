@@ -755,7 +755,7 @@ void hook_chain_remove(hook_chain_t *chain, void *before, void *after)
                 chain->afters[i] = 0;
                 dsb(ish);
                 chain->states[i] = CHAIN_ITEM_STATE_EMPTY;
-                break;
+                // 移除 break，继续检查其他匹配的 hook
             }
     }
     logkv("Wrap chain remove: %llx, %llx, %llx\n", chain->hook.func_addr, before, after);
