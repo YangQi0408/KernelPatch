@@ -114,6 +114,12 @@ static uint64_t branch_func_addr_once(uint64_t addr)
 {
     uint64_t ret = addr;
     uint32_t inst = *(uint32_t *)addr;
+    
+    // 检查是否是有效的指令地址
+    if (is_bad_address((void *)addr)) {
+        return addr;
+    }
+    
     if ((inst & MASK_B) == INST_B) {
         uint64_t imm26 = bits32(inst, 25, 0);
         uint64_t imm64 = sign64_extend(imm26 << 2u, 28u);
@@ -121,16 +127,35 @@ static uint64_t branch_func_addr_once(uint64_t addr)
     } else if (inst == ARM64_BTI_C || inst == ARM64_BTI_J || inst == ARM64_BTI_JC) {
         ret = addr + 4;
     } else {
+        // 对于不是分支指令的地址，检查是否是 CFI 跳转表
+        // 如果是 .cfi_jt 或 .cfi 结尾的符号，可能需要特殊处理
+        // 这里保守处理，直接返回原地址
     }
     return ret;
 }
 
 uint64_t branch_func_addr(uint64_t addr)
 {
-    uint64_t ret;
+    uint64_t ret = addr;
+    int loop_count = 0;
+    const int max_loop = 10; // 防止无限循环
+    
     for (;;) {
+        // 检查是否是有效地址
+        if (is_bad_address((void *)addr)) {
+            return ret; // 返回最后一个有效地址
+        }
+        
         ret = branch_func_addr_once(addr);
+        
+        // 如果地址没有变化，退出循环
         if (ret == addr) break;
+        
+        // 防止无限循环
+        if (++loop_count >= max_loop) {
+            break;
+        }
+        
         addr = ret;
     }
     return ret;
@@ -644,7 +669,27 @@ hook_err_t hook(void *func, void *replace, void **backup)
     if (!func || !replace || !backup) {
         return -HOOK_BAD_ADDRESS;
     }
+    
+    // 检查函数地址是否有效
+    if (is_bad_address(func)) {
+        logkv("Hook func: invalid address %llx\n", func);
+        return -HOOK_BAD_ADDRESS;
+    }
+    
     uint64_t origin_addr = branch_func_addr((uintptr_t)func);
+    
+    // 验证 origin_addr 是否有效
+    if (is_bad_address((void *)origin_addr)) {
+        logkv("Hook func: invalid origin address %llx for func %llx\n", origin_addr, func);
+        return -HOOK_BAD_ADDRESS;
+    }
+    
+    // 检查是否已经存在钩子
+    if (hook_get_mem_from_origin(origin_addr)) {
+        logkv("Hook func: %llx already hooked\n", func);
+        return -HOOK_DUPLICATED;
+    }
+    
     hook_t *hook = (hook_t *)hook_mem_zalloc(origin_addr, INLINE);
     if (!hook) return -HOOK_NO_MEM;
     hook->func_addr = (uint64_t)func;
